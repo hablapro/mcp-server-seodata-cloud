@@ -48,6 +48,11 @@ export abstract class BaseTool {
   }
 
   protected getFilterExpression(): z.ZodType<any> {
+    if( defaultGlobalToolConfig.simpleFilter ) {
+      // Permissive filter schema for LLM tool compatibility (e.g., OpenAI/ChatGPT).
+      // If you modify this behavior, re-verify compatibility with OpenAI tools.
+      return z.any();
+    }
     const filterExpression = 
     z.array(
         z.union([

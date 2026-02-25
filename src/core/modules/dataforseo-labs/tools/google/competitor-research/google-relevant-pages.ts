@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { DataForSEOClient } from '../../../../../client/dataforseo.client.js';
 import { BaseTool } from '../../../../base.tool.js';
 
-export class GoogleDomainCompetitorsTool extends BaseTool {
+export class GoogleRelevantPagesTool extends BaseTool {
   constructor(private client: DataForSEOClient) {
     super(client);
   }
@@ -73,14 +73,8 @@ default rule:
 optional field
 default value: false
 set to true if you want to get highly-relevant competitors excluding the top websites`) ,
-          item_types: z.array(z.string()).optional().describe(
-            `item types to return
-            optional field
-            default: ['organic']
-            possible values:
-            organic
-            paid`
-        ),
+      item_types: z.array(z.enum(['organic', 'paid','featured_snippet','local_pack'])).optional().describe(`display results by item type
+indicates the type of search results included in the response`).default(['organic']),
           include_clickstream_data: z.boolean().optional().default(false).describe(
             `Include or exclude data from clickstream-based metrics in the result`)
 

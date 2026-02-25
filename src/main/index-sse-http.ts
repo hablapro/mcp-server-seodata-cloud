@@ -12,6 +12,7 @@ import { name, version } from '../core/utils/version.js';
 import { InMemoryEventStore } from '@modelcontextprotocol/sdk/examples/shared/inMemoryEventStore.js';
 import { ModuleLoaderService } from '../core/utils/module-loader.js';
 import { initializeFieldConfiguration } from '../core/config/field-configuration.js';
+import { initMcpServer } from './init-mcp-server.js';
 
 // Initialize field configuration if provided
 initializeFieldConfiguration();
@@ -67,45 +68,7 @@ function cleanupStaleConnections() {
 // Start periodic cleanup
 const cleanupInterval = setInterval(cleanupStaleConnections, CLEANUP_INTERVAL);
 
-function getServer(username: string | undefined, password: string | undefined): McpServer {
-  const server = new McpServer({
-    name,
-    version,
-  }, { capabilities: { logging: {} } });
 
-  // Initialize DataForSEO client
-  const dataForSEOConfig: DataForSEOConfig = {
-    username: username || "",
-    password: password || "",
-  };
-  
-  const dataForSEOClient = new DataForSEOClient(dataForSEOConfig);
-  console.error('DataForSEO client initialized');
-  
-  // Parse enabled modules from environment
-  const enabledModules = EnabledModulesSchema.parse(process.env.ENABLED_MODULES);
-  
-  // Initialize modules
-  const modules: BaseModule[] = ModuleLoaderService.loadModules(dataForSEOClient, enabledModules);
-  
-
-  // Register module tools
-  modules.forEach(module => {
-    const tools = module.getTools();
-    Object.entries(tools).forEach(([name, tool]) => {
-      const typedTool = tool as ToolDefinition;
-      const schema = z.object(typedTool.params);
-      server.tool(
-        name,
-        typedTool.description,
-        schema.shape,
-        typedTool.handler
-      );
-    });
-  });
-
-  return server;
-}
 
 // Create Express application
 const app = express();
@@ -116,7 +79,7 @@ const basicAuth = (req: Request, res: Response, next: NextFunction) => {
   // Check for API Key first
   const apiKey = req.headers['x-api-key'] || req.headers['api-key'];
   const expectedApiKey = process.env.MCP_API_KEY;
-  
+
   if (expectedApiKey && apiKey !== expectedApiKey) {
     res.status(401).json({
       jsonrpc: "2.0",
@@ -128,26 +91,47 @@ const basicAuth = (req: Request, res: Response, next: NextFunction) => {
     });
     return;
   }
-  
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Basic ')) {
+
+  // Allow tools/list without auth
+  if (req.body?.method === 'tools/list') {
     next();
     return;
   }
 
-  const base64Credentials = authHeader.split(' ')[1];
-  const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
-  const [username, password] = credentials.split(':');
+  const authHeader = req.headers.authorization;
+  const envUsername = process.env.DATAFORSEO_USERNAME;
+  const envPassword = process.env.DATAFORSEO_PASSWORD;
 
+  let username: string | undefined;
+  let password: string | undefined;
+
+  // Try to extract credentials from Authorization header
+  if (authHeader?.startsWith('Basic ')) {
+    try {
+        const base64Credentials = authHeader.slice(6);
+        const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
+        [username, password] = credentials.split(':');
+    } catch (error) {
+        console.error('Invalid Basic auth header:', error);
+    }
+  }
+
+  // Fall back to environment variables if no header credentials provided
+  if (!username || !password) {
+    username = envUsername;
+    password = envPassword;
+  }
+
+  // Validate credentials
   if (!username || !password) {
     console.error('Invalid credentials');
     res.status(401).json({
-      jsonrpc: "2.0",
-      error: {
-        code: -32001,
-        message: "Invalid credentials"
-      },
-      id: null
+        jsonrpc: "2.0",
+        error: {
+            code: -32001,
+            message: "Invalid credentials"
+        },
+        id: null
     });
     return;
   }
@@ -168,28 +152,8 @@ const handleMcpRequest = async (req: Request, res: Response) => {
     
     try {
       console.error(Date.now().toLocaleString())
-      
-    // Handle credentials
-      if (!req.username && !req.password) {
-        const envUsername = process.env.DATAFORSEO_USERNAME;
-        const envPassword = process.env.DATAFORSEO_PASSWORD;
-        if (!envUsername || !envPassword) {
-          console.error('No DataForSEO credentials provided');
-          res.status(401).json({
-            jsonrpc: "2.0",
-            error: {
-              code: -32001,
-              message: "Authentication required. Provide DataForSEO credentials."
-            },
-            id: null
-          });
-          return;
-        }
-        req.username = envUsername;
-        req.password = envPassword;
-      }
-      
-      const server = getServer(req.username, req.password); 
+
+      const server = initMcpServer(req.username, req.password); 
       console.error(Date.now().toLocaleString())
 
       const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
@@ -302,7 +266,7 @@ app.get('/sse', basicAuth, async (req: Request, res: Response) => {
   // Set socket timeout
   req.socket.setTimeout(CONNECTION_TIMEOUT);
 
-  const server = getServer(req.username, req.password);
+  const server = initMcpServer(req.username, req.password);
   await server.connect(transport);
 });
 
